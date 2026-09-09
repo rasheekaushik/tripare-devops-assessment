@@ -1,39 +1,76 @@
--- Tripare AI DevOps Assessment
--- Seed data for local development/testing
+INSERT INTO hotel_bookings (
+    id,
+    org_id,
+    hotel_id,
+    city,
+    checkin_date,
+    checkout_date,
+    amount,
+    status,
+    created_at
+)
+SELECT
+    gen_random_uuid(),
+    (
+        ARRAY[
+            '11111111-1111-1111-1111-111111111111'::uuid,
+            '22222222-2222-2222-2222-222222222222'::uuid,
+            '33333333-3333-3333-3333-333333333333'::uuid,
+            '44444444-4444-4444-4444-444444444444'::uuid,
+            '55555555-5555-5555-5555-555555555555'::uuid
+        ]
+    )[1 + floor(random() * 5)::int],
+    'HOTEL-' || lpad((1 + floor(random() * 100))::int::text, 4, '0'),
+    (
+        ARRAY[
+            'delhi',
+            'mumbai',
+            'bangalore',
+            'hyderabad',
+            'pune',
+            'chennai',
+            'kolkata',
+            'jaipur'
+        ]
+    )[1 + floor(random() * 8)::int],
+    CURRENT_DATE + floor(random() * 60)::int,
+    CURRENT_DATE + floor(random() * 60)::int + 1,
+    round((1000 + random() * 49000)::numeric, 2),
+    (
+        ARRAY[
+            'confirmed',
+            'cancelled',
+            'pending',
+            'completed'
+        ]
+    )[1 + floor(random() * 4)::int],
+    NOW() - (floor(random() * 90)::int || ' days')::interval
+FROM generate_series(1, 10000);
 
-INSERT INTO customers (name, email)
-VALUES
-    ('Aarav Sharma', 'aarav@example.com'),
-    ('Diya Patel', 'diya@example.com'),
-    ('Arjun Mehta', 'arjun@example.com'),
-    ('Ananya Singh', 'ananya@example.com'),
-    ('Kabir Verma', 'kabir@example.com')
-ON CONFLICT (email) DO NOTHING;
-
-INSERT INTO products (name, price)
-VALUES
-    ('Laptop', 75000.00),
-    ('Keyboard', 2500.00),
-    ('Mouse', 1200.00),
-    ('Monitor', 18000.00),
-    ('Headphones', 5000.00),
-    ('Webcam', 3500.00)
-ON CONFLICT DO NOTHING;
-
-INSERT INTO orders (customer_id, amount, status)
-VALUES
-    (1, 77500.00, 'completed'),
-    (2, 18000.00, 'completed'),
-    (3, 6200.00, 'pending'),
-    (4, 5000.00, 'completed'),
-    (5, 3500.00, 'pending');
-
-INSERT INTO order_items (order_id, product_id, quantity, unit_price)
-VALUES
-    (1, 1, 1, 75000.00),
-    (1, 2, 1, 2500.00),
-    (2, 4, 1, 18000.00),
-    (3, 2, 1, 2500.00),
-    (3, 3, 1, 1200.00),
-    (3, 6, 1, 3500.00),
-    (4, 5, 1, 5000.00);
+INSERT INTO booking_events (
+    booking_id,
+    event_type,
+    payload,
+    created_at
+)
+SELECT
+    id,
+    (
+        ARRAY[
+            'booking_created',
+            'booking_confirmed',
+            'payment_completed',
+            'booking_cancelled'
+        ]
+    )[1 + floor(random() * 4)::int],
+    jsonb_build_object(
+        'source', 'seed',
+        'booking_id', id::text
+    ),
+    created_at + interval '5 minutes'
+FROM (
+    SELECT id, created_at
+    FROM hotel_bookings
+    ORDER BY created_at
+    LIMIT 3000
+) bookings;

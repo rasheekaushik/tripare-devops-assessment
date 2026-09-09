@@ -1,591 +1,424 @@
-TRIPARE AI - DEVOPS ASSESSMENT
-================================
+# Tripare AI — DevOps Assessment
 
-A practical DevOps assessment demonstrating Infrastructure as Code,
-database reliability, backup and disaster recovery, query optimization,
-containerization, shell automation, and CI validation.
+Terraform infrastructure design and PostgreSQL database reliability implementation using Terraform, AWS, Docker Compose, Shell scripting, and GitHub Actions.
 
-The project is designed to be runnable locally for database reliability
-testing while providing production-oriented AWS infrastructure definitions
-through Terraform.
+> **Note:** AWS resources are not deployed. Terraform is validated using `fmt`, `init`, `validate`, and plan-only execution as required by the assessment.
 
+---
 
-TECHNOLOGY STACK
-================
+## Architecture
 
-- Terraform
-- AWS
-- Docker
-- Docker Compose
-- PostgreSQL 16
-- GitHub Actions
-- Bash
-- ShellCheck
+```text
+                    Internet
+                       |
+                       | HTTP :80
+                       v
+                +--------------+
+                |     ALB      |
+                | Public Subnet|
+                +------+-------+
+                       |
+                       | HTTP :80
+                       v
+                +--------------+
+                | ECS/Fargate  |
+                |Private Subnet|
+                +------+-------+
+                       |
+                       | PostgreSQL :5432
+                       v
+                +--------------+
+                | RDS PostgreSQL|
+                |Private Subnet|
+                +--------------+
+```
 
+### Security
 
-PROJECT ARCHITECTURE
-====================
+* ALB accepts HTTP traffic from the internet.
+* ECS accepts traffic only from the ALB security group.
+* RDS accepts PostgreSQL traffic only from the ECS security group.
+* ECS and RDS run in private subnets.
+* NAT Gateway provides outbound access for private ECS tasks.
 
-The project contains two main components:
+---
 
-1. AWS infrastructure defined using Terraform.
-2. A local PostgreSQL environment used to demonstrate database reliability.
+## Repository Structure
 
-AWS Architecture:
-
-                         AWS
-                          |
-                     VPC 10.0.0.0/16
-                          |
-             +------------+------------+
-             |                         |
-       Public Subnets             Private Subnets
-       10.0.1.0/24                10.0.3.0/24
-       10.0.2.0/24                10.0.4.0/24
-             |                         |
-       Internet Gateway          RDS PostgreSQL
-                                  Port 5432
-                                      |
-                              Database Security
-                                   Group
-
-
-AWS INFRASTRUCTURE
-===================
-
-Terraform defines:
-
-- VPC with CIDR 10.0.0.0/16
-- Two public subnets across two Availability Zones
-- Two private subnets across two Availability Zones
-- Internet Gateway
-- Public route table
-- Private route table
-- PostgreSQL security group
-- RDS PostgreSQL instance
-- RDS DB subnet group
-- Encryption at rest
-- Automated backups with 7-day retention
-- Private database access
-
-RDS configuration:
-
-- PostgreSQL 16
-- Instance class: db.t3.micro
-- Storage: 20 GB gp3
-- Maximum storage: 100 GB
-- Multi-AZ: Disabled for assessment environment
-- Public accessibility: Disabled
-- Database port: 5432
-
-
-SECURITY DESIGN
-===============
-
-The infrastructure follows a private-database architecture.
-
-Network security:
-
-- RDS is placed only in private subnets.
-- RDS does not have a public IP.
-- PostgreSQL port 5432 is restricted to the VPC CIDR.
-- Public and database subnets are separated.
-- The database security group allows only the required PostgreSQL traffic.
-
-Database security:
-
-Terraform uses:
-
-    manage_master_user_password = true
-
-This allows AWS to manage the RDS master password through AWS Secrets
-Manager rather than storing a database password directly in Terraform.
-
-RDS storage encryption is also enabled.
-
-IMPORTANT:
-
-The PostgreSQL credentials used by Docker Compose are assessment-only
-credentials and must not be reused in production.
-
-
-REPOSITORY STRUCTURE
-====================
-
+```text
 tripare-devops-assessment/
-|
-+-- .github/
-|   +-- workflows/
-|       +-- ci.yml
-|
-+-- database/
-|   +-- backup.sh
-|   +-- docker-compose.yml
-|   +-- init.sql
-|   +-- optimize.sql
-|   +-- restore.sh
-|
-+-- scripts/
-|   +-- health-check.sh
-|
-+-- terraform/
-|   +-- main.tf
-|   +-- outputs.tf
-|   +-- terraform.tfvars.example
-|   +-- variables.tf
-|   +-- versions.tf
-|   +-- .terraform.lock.hcl
-|
-+-- .gitignore
-+-- README.txt
+├── infra/
+│   ├── modules/
+│   │   ├── network/
+│   │   ├── ecs/
+│   │   └── rds/
+│   └── envs/
+│       ├── dev/
+│       └── prod/
+│
+├── database/
+│   ├── docker-compose.yml
+│   ├── migrations/
+│   │   └── 001_initial_schema.sql
+│   ├── seed/
+│   │   └── 001_seed_data.sql
+│   └── optimize.sql
+│
+├── scripts/
+│   ├── backup.sh
+│   ├── restore.sh
+│   └── health-check.sh
+│
+├── .github/workflows/
+│   └── ci.yml
+│
+├── .gitignore
+└── README.md
+```
 
+---
 
-LOCAL DATABASE SETUP
-====================
+# 1. Terraform
 
-Prerequisites:
+Terraform modules:
 
-- Docker
-- Docker Compose
-- Terraform
-- Git
+* **Network** — VPC, public/private subnets, IGW, NAT Gateway and routes
+* **ECS** — ECS/Fargate, ALB, target group, security groups and CloudWatch logs
+* **RDS** — PostgreSQL, DB subnet group, security group and backups
 
-Verify the tools:
+### Dev vs Prod
 
-    docker --version
-    docker compose version
-    terraform --version
-    git --version
+| Setting             |           Dev |          Prod |
+| ------------------- | ------------: | ------------: |
+| ECS tasks           |             1 |             2 |
+| ECS CPU             |           256 |           512 |
+| ECS Memory          |        512 MB |       1024 MB |
+| RDS                 | `db.t3.micro` | `db.t3.small` |
+| Storage             |         20 GB |         50 GB |
+| Backup retention    |        3 days |       14 days |
+| Multi-AZ            |            No |           Yes |
+| Deletion protection |            No |           Yes |
+| NAT Gateway         |        Single |        Per-AZ |
 
+### Validate Terraform
 
-START POSTGRESQL
-================
+```bash
+cd infra/envs/dev
+terraform init
+terraform validate
+terraform plan -refresh=false
+```
 
-From the repository root:
+```bash
+cd ../prod
+terraform init
+terraform validate
+terraform plan -refresh=false
+```
 
-    cd database
-    docker compose up -d
+Format check:
 
-Check the container:
+```bash
+cd ../../..
+terraform fmt -check -recursive infra
+```
 
-    docker ps
+> `terraform apply` is intentionally not performed.
 
-The PostgreSQL container is named:
+---
 
-    tripare-postgres
+# 2. Local PostgreSQL
 
-Check PostgreSQL readiness:
+The database runs locally using Docker Compose.
 
-    docker exec tripare-postgres \
-      pg_isready -U tripare_user -d tripare
+Start:
 
+```bash
+docker compose -f database/docker-compose.yml up -d
+```
 
-DATABASE SCHEMA
-===============
+Database:
 
-The initialization script creates four related tables:
+```text
+Host: localhost
+Port: 5432
+Database: tripare
+User: tripare_user
+Password: tripare_password
+```
 
-- customers
-- orders
-- products
-- order_items
+The schema contains:
 
-The schema includes:
+### `hotel_bookings`
 
-- Primary keys
-- Foreign keys
-- Timestamps
-- Indexes
-- Sample data
+```text
+id, org_id, hotel_id, city, checkin_date,
+checkout_date, amount, status, created_at
+```
 
-To inspect the tables:
+### `booking_events`
 
-    docker exec -it tripare-postgres \
-      psql -U tripare_user -d tripare
+```text
+id, booking_id, event_type, payload, created_at
+```
 
-Inside PostgreSQL:
+---
 
-    \dt
+# 3. Seed Data
 
-Exit:
+The seed script creates:
 
-    \q
+* **10,000 hotel bookings**
+* **3,000 booking events**
+* **8 cities**
+* **5 organizations**
+* **4 booking statuses**
+* Multiple hotels and booking amounts
 
+This exceeds the assessment requirement of at least 100 bookings.
 
-DATABASE HEALTH CHECK
-=====================
+Initialize from a clean database:
+
+```bash
+docker compose -f database/docker-compose.yml down -v
+docker compose -f database/docker-compose.yml up -d
+```
+
+---
+
+# 4. Query Optimization
+
+Required query:
+
+```sql
+SELECT org_id, status, COUNT(*), SUM(amount)
+FROM hotel_bookings
+WHERE city = 'delhi'
+  AND created_at >= NOW() - INTERVAL '30 days'
+GROUP BY org_id, status;
+```
+
+Index added:
+
+```sql
+CREATE INDEX idx_hotel_bookings_city_created_at
+ON hotel_bookings(city, created_at);
+```
+
+### Why this index?
+
+The query filters by `city` using equality and `created_at` using a range condition. Therefore, the composite B-tree index `(city, created_at)` allows PostgreSQL to narrow the matching rows before performing the aggregation.
+
+The optimization is verified using `EXPLAIN ANALYZE`.
+
+Local test result:
+
+```text
+Before index: ~0.629 ms
+After index:  ~0.231 ms
+```
+
+The local test showed approximately **63% lower execution time**.
 
 Run:
 
-    ./scripts/health-check.sh
+```bash
+docker exec -i tripare-postgres \
+  psql -U tripare_user -d tripare \
+  < database/optimize.sql
+```
 
-The health check validates:
+---
 
-1. PostgreSQL container exists.
-2. Container is running.
-3. PostgreSQL accepts connections.
-4. Required database tables exist.
-5. Orders contain data.
-
-Example successful output:
-
-    ======================================
-    Tripare PostgreSQL Health Check
-    ======================================
-
-    1. Checking Docker container...
-    PASS: PostgreSQL container exists.
-
-    2. Checking container status...
-    PASS: Container is running.
-
-    3. Checking PostgreSQL readiness...
-    PASS: PostgreSQL is accepting connections.
-
-    4. Checking database...
-    PASS: Database contains 4 tables.
-
-    5. Checking orders...
-    PASS: Orders table contains 100005 rows.
-
-    ======================================
-    HEALTH CHECK PASSED
-    ======================================
-
-
-DATABASE BACKUP
-===============
-
-The backup script uses PostgreSQL pg_dump.
+# 5. Database Health Check
 
 Run:
 
-    ./database/backup.sh
+```bash
+./scripts/health-check.sh
+```
 
-Backups are stored in:
+The script verifies:
 
-    database/backups/
+* PostgreSQL availability
+* Required tables
+* Booking data
+* Booking events
+* Multiple cities
+* Multiple organizations
+* Multiple statuses
+* Optimization index
 
-Backup files are intentionally excluded from Git using .gitignore.
+---
+
+# 6. Backup and Restore
+
+### Backup
+
+```bash
+./scripts/backup.sh
+```
+
+Creates timestamped backups under:
+
+```text
+database/backups/
+```
 
 Example:
 
-    database/backups/tripare_20260909_055225.sql
+```text
+database/backups/tripare_20260909_115608.sql
+```
 
-The backup contains both database schema and data.
+Backups are excluded from Git.
 
+### Restore
 
-DISASTER RECOVERY / RESTORE
-===========================
+```bash
+./scripts/restore.sh database/backups/<backup-file>.sql
+```
 
-The restore procedure was tested by intentionally deleting the database
-tables and restoring them from a PostgreSQL backup.
+The script restores into a fresh database:
 
-Restore command:
+```text
+tripare_restore_test
+```
 
-    ./database/restore.sh database/backups/<backup-file>.sql
+and verifies the restored row counts.
 
 Example:
 
-    ./database/restore.sh \
-      database/backups/tripare_20260909_055225.sql
+```text
+hotel_bookings rows: 10000
+booking_events rows: 3000
 
-After restoration:
+Restore verification PASSED.
+```
 
-    docker exec -it tripare-postgres \
-      psql -U tripare_user -d tripare
+---
 
-Then:
+# 7. GitHub Actions
 
-    \dt
+`.github/workflows/ci.yml` validates:
 
-The four tables were successfully restored and the data was verified.
+### Terraform
 
-The demonstrated disaster recovery workflow is:
+```text
+fmt → init → validate → plan
+```
 
-    Backup
-       |
-       v
-    Database Failure
-       |
-       v
-    Restore
-       |
-       v
-    Data Verification
+for both Dev and Prod.
 
-
-QUERY OPTIMIZATION
-==================
-
-The project demonstrates PostgreSQL query optimization using
-EXPLAIN ANALYZE.
-
-A test dataset of approximately 100,000 orders was generated.
-
-Baseline query:
-
-    EXPLAIN ANALYZE
-    SELECT *
-    FROM orders
-    WHERE customer_id = 3
-    AND status = 'completed';
-
-
-BEFORE OPTIMIZATION
-===================
-
-The query used the existing customer_id index and filtered the status
-condition afterwards.
-
-Measured execution time:
-
-    10.686 ms
-
-
-OPTIMIZATION
-============
-
-A composite index was created:
-
-    CREATE INDEX idx_orders_customer_status
-    ON orders(customer_id, status);
-
-The same query was executed again.
-
-
-AFTER OPTIMIZATION
-==================
-
-The execution plan used both query predicates through the composite index.
-
-Measured execution time:
-
-    7.562 ms
-
-Approximate improvement:
-
-    29 percent
-
-This demonstrates why indexes should be designed around actual query
-predicates rather than indexing individual columns without considering
-how the query filters data.
-
-The complete SQL is available in:
-
-    database/optimize.sql
-
-
-TERRAFORM
-=========
-
-The Terraform configuration defines AWS infrastructure but does not
-deploy it automatically.
-
-The assessment does not require an actual AWS deployment.
-
-
-TERRAFORM FORMATTING
-====================
-
-Run:
-
-    terraform -chdir=terraform fmt -check -recursive
-
-A clean result indicates that the Terraform files are correctly formatted.
-
-
-TERRAFORM INITIALIZATION
-========================
-
-Run:
-
-    terraform -chdir=terraform init
-
-For validation without configuring a backend:
-
-    terraform -chdir=terraform init -backend=false
-
-The AWS provider version is recorded in:
-
-    terraform/.terraform.lock.hcl
-
-
-TERRAFORM VALIDATION
-====================
-
-Run:
-
-    terraform -chdir=terraform validate
-
-Expected result:
-
-    Success! The configuration is valid.
-
-
-TERRAFORM PLAN
-==============
-
-A real Terraform plan requires AWS credentials because Terraform needs
-to communicate with AWS to refresh and evaluate provider-managed resources.
-
-The assessment explicitly states that actual AWS deployment is not required.
-
-Therefore:
-
-- No AWS credentials are stored in this repository.
-- No AWS resources are deployed.
-- Terraform formatting was validated.
-- Terraform initialization was validated.
-- Terraform configuration validation was successful.
-
-The Terraform plan could not be completed without AWS credentials.
-
-This limitation is intentionally documented rather than hiding the result.
-
-
-GITHUB ACTIONS CI
-=================
-
-The GitHub Actions workflow is located at:
-
-    .github/workflows/ci.yml
-
-The workflow contains four validation jobs.
-
-
-1. TERRAFORM VALIDATION
------------------------
-
-Runs:
-
-    terraform fmt -check
-    terraform init -backend=false
-    terraform validate
-
-
-2. SHELL SCRIPT VALIDATION
---------------------------
+### Shell scripts
 
 ShellCheck validates:
 
-    database/backup.sh
-    database/restore.sh
-    scripts/health-check.sh
+```text
+scripts/backup.sh
+scripts/restore.sh
+scripts/health-check.sh
+```
 
+### Docker
 
-3. DOCKER COMPOSE VALIDATION
-----------------------------
+Validates Docker Compose configuration.
 
-The workflow validates:
+### Database
 
-    database/docker-compose.yml
+CI automatically:
 
-using:
+1. Starts PostgreSQL
+2. Runs health checks
+3. Runs query optimization
+4. Creates a backup
+5. Restores the backup
+6. Verifies restored data
+7. Cleans up
 
-    docker compose config
+---
 
+# 8. Verification
 
-4. DATABASE RELIABILITY TEST
-----------------------------
+Complete local verification:
 
-The workflow:
+```bash
+docker compose -f database/docker-compose.yml up -d
 
-1. Starts PostgreSQL.
-2. Waits for PostgreSQL readiness.
-3. Runs the database health check.
-4. Verifies database tables.
-5. Stops and removes the database environment.
+./scripts/health-check.sh
 
-This provides automated validation of the local database environment.
+./scripts/backup.sh
 
+./scripts/restore.sh database/backups/<backup-file>.sql
 
-RELIABILITY CONSIDERATIONS
-==========================
+shellcheck scripts/backup.sh
+shellcheck scripts/restore.sh
+shellcheck scripts/health-check.sh
+```
 
-The implementation demonstrates:
+Terraform:
 
-- Automated PostgreSQL backups
-- Tested restore procedure
-- Database health checks
-- PostgreSQL readiness checks
-- Persistent Docker volume
-- RDS automated backups
-- Seven-day RDS backup retention
-- RDS storage encryption
-- Private database networking
-- Query performance measurement
-- EXPLAIN ANALYZE
-- CI validation
-- Shell automation
-- Infrastructure as Code
+```bash
+cd infra/envs/dev
+terraform validate
+terraform plan -refresh=false
 
+cd ../prod
+terraform validate
+terraform plan -refresh=false
+```
 
-DESIGN DECISIONS
-================
+---
 
-WHY POSTGRESQL?
+# Assessment Checklist
 
-PostgreSQL provides strong relational integrity, mature backup tooling,
-indexing capabilities, and excellent support for EXPLAIN ANALYZE.
+| Requirement              | Status   |
+| ------------------------ | -------- |
+| Terraform infrastructure | ✅        |
+| Dev environment          | ✅        |
+| Prod environment         | ✅        |
+| Docker Compose database  | ✅        |
+| SQL migrations           | ✅        |
+| Seed data                | ✅        |
+| 100+ bookings            | ✅ 10,000 |
+| Multiple cities          | ✅        |
+| Multiple organizations   | ✅        |
+| Multiple statuses        | ✅        |
+| Booking events           | ✅ 3,000  |
+| Query optimization       | ✅        |
+| Index + explanation      | ✅        |
+| Backup script            | ✅        |
+| Restore script           | ✅        |
+| README                   | ✅        |
+| GitHub Actions CI        | ✅        |
 
+---
 
-WHY DOCKER COMPOSE?
+## Cleanup
 
-Docker Compose makes the database environment reproducible and allows
-the reliability workflow to run locally without requiring AWS.
+```bash
+docker compose -f database/docker-compose.yml down -v
+```
 
+No AWS cleanup is required because Terraform infrastructure was not deployed.
 
-WHY PRIVATE RDS SUBNETS?
+---
 
-Databases should not be directly exposed to the public internet.
+## Summary
 
-The RDS instance is therefore placed in private subnets and configured
-with:
+This project demonstrates:
 
-    publicly_accessible = false
+* Modular Terraform infrastructure
+* AWS VPC and network segmentation
+* ALB → ECS/Fargate → RDS architecture
+* Private application and database tiers
+* Least-privilege security groups
+* Dev/Prod environment separation
+* PostgreSQL migrations and seed data
+* Query optimization with composite indexing
+* Database backup and restore
+* Automated restore verification
+* ShellCheck
+* GitHub Actions CI
 
-
-WHY A COMPOSITE INDEX?
-
-The tested query filters on:
-
-    customer_id
-    status
-
-A composite index allows PostgreSQL to use both predicates at the index
-level.
-
-
-WHY NO NAT GATEWAY?
-
-The assessment does not deploy application workloads that require
-outbound internet access from private subnets.
-
-A NAT Gateway would add unnecessary cost for this assessment architecture.
-
-
-VALIDATION SUMMARY
-==================
-
-The following local validations were completed successfully:
-
-    Terraform formatting          PASS
-    Terraform initialization      PASS
-    Terraform validation          PASS
-    Docker Compose validation     PASS
-    Shell syntax validation       PASS
-    PostgreSQL health check       PASS
-    Database backup               PASS
-    Database restore              PASS
-    Query optimization            PASS
-    Git repository validation     PASS
-
-The Terraform plan was not completed because AWS credentials were not
-configured, and actual AWS deployment is not required for this assessment.
-
-
-AUTHOR
-======
-Rashi Kaushik
-DevOps Engineer
+AWS deployment is intentionally **plan-only**, while the complete database reliability workflow is runnable locally.

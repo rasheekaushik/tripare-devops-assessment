@@ -1,77 +1,155 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -euo pipefail
 
-CONTAINER_NAME="tripare-postgres"
-DB_NAME="tripare"
-DB_USER="tripare_user"
+CONTAINER_NAME="${POSTGRES_CONTAINER:-tripare-postgres}"
+DB_NAME="${POSTGRES_DB:-tripare}"
+DB_USER="${POSTGRES_USER:-tripare_user}"
 
-echo "======================================"
-echo "Tripare PostgreSQL Health Check"
-echo "======================================"
+echo "========================================"
+echo "Tripare Database Health Check"
+echo "========================================"
 
 echo
-echo "1. Checking Docker container..."
+echo "1. Checking PostgreSQL readiness..."
 
-if docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-    echo "PASS: PostgreSQL container exists."
-else
-    echo "FAIL: PostgreSQL container does not exist."
+docker exec "${CONTAINER_NAME}" \
+    pg_isready \
+    -U "${DB_USER}" \
+    -d "${DB_NAME}" \
+    >/dev/null
+
+echo "PASS: PostgreSQL is ready."
+
+echo
+echo "2. Checking required tables..."
+
+TABLE_COUNT="$(
+    docker exec "${CONTAINER_NAME}" \
+    psql -U "${DB_USER}" -d "${DB_NAME}" -tAc \
+    "SELECT COUNT(*)
+     FROM information_schema.tables
+     WHERE table_schema = 'public'
+       AND table_name IN ('hotel_bookings', 'booking_events');"
+)"
+
+if [[ "${TABLE_COUNT}" -ne 2 ]]; then
+    echo "FAIL: Required tables are missing."
     exit 1
 fi
 
+echo "PASS: Required tables exist."
+
 echo
-echo "2. Checking container status..."
+echo "3. Checking hotel bookings..."
 
-STATUS=$(docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME")
+BOOKING_COUNT="$(
+    docker exec "${CONTAINER_NAME}" \
+    psql -U "${DB_USER}" -d "${DB_NAME}" -tAc \
+    "SELECT COUNT(*) FROM hotel_bookings;"
+)"
 
-if [ "$STATUS" = "running" ]; then
-    echo "PASS: Container is running."
-else
-    echo "FAIL: Container status is $STATUS."
+echo "hotel_bookings rows: ${BOOKING_COUNT}"
+
+if [[ "${BOOKING_COUNT}" -lt 100 ]]; then
+    echo "FAIL: Expected at least 100 hotel bookings."
     exit 1
 fi
 
-echo
-echo "3. Checking PostgreSQL readiness..."
+echo "PASS: hotel_bookings contains at least 100 rows."
 
-if docker exec "$CONTAINER_NAME" \
-    pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
-    echo "PASS: PostgreSQL is accepting connections."
-else
-    echo "FAIL: PostgreSQL is not ready."
+echo
+echo "4. Checking booking events..."
+
+EVENT_COUNT="$(
+    docker exec "${CONTAINER_NAME}" \
+    psql -U "${DB_USER}" -d "${DB_NAME}" -tAc \
+    "SELECT COUNT(*) FROM booking_events;"
+)"
+
+echo "booking_events rows: ${EVENT_COUNT}"
+
+if [[ "${EVENT_COUNT}" -lt 1 ]]; then
+    echo "FAIL: booking_events is empty."
     exit 1
 fi
 
+echo "PASS: booking_events contains data."
+
 echo
-echo "4. Checking database..."
+echo "5. Checking multiple cities..."
 
-TABLE_COUNT=$(docker exec "$CONTAINER_NAME" \
-    psql -U "$DB_USER" -d "$DB_NAME" -tAc \
-    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';")
+CITY_COUNT="$(
+    docker exec "${CONTAINER_NAME}" \
+    psql -U "${DB_USER}" -d "${DB_NAME}" -tAc \
+    "SELECT COUNT(DISTINCT city) FROM hotel_bookings;"
+)"
 
-if [ "$TABLE_COUNT" -ge 4 ]; then
-    echo "PASS: Database contains $TABLE_COUNT tables."
-else
-    echo "FAIL: Expected at least 4 tables, found $TABLE_COUNT."
+echo "Distinct cities: ${CITY_COUNT}"
+
+if [[ "${CITY_COUNT}" -lt 2 ]]; then
+    echo "FAIL: Seed data should contain multiple cities."
     exit 1
 fi
 
+echo "PASS: Multiple cities present."
+
 echo
-echo "5. Checking orders..."
+echo "6. Checking multiple organizations..."
 
-ORDER_COUNT=$(docker exec "$CONTAINER_NAME" \
-    psql -U "$DB_USER" -d "$DB_NAME" -tAc \
-    "SELECT COUNT(*) FROM orders;")
+ORG_COUNT="$(
+    docker exec "${CONTAINER_NAME}" \
+    psql -U "${DB_USER}" -d "${DB_NAME}" -tAc \
+    "SELECT COUNT(DISTINCT org_id) FROM hotel_bookings;"
+)"
 
-if [ "$ORDER_COUNT" -gt 0 ]; then
-    echo "PASS: Orders table contains $ORDER_COUNT rows."
-else
-    echo "FAIL: Orders table is empty."
+echo "Distinct organizations: ${ORG_COUNT}"
+
+if [[ "${ORG_COUNT}" -lt 2 ]]; then
+    echo "FAIL: Seed data should contain multiple organizations."
     exit 1
 fi
 
+echo "PASS: Multiple organizations present."
+
 echo
-echo "======================================"
-echo "HEALTH CHECK PASSED"
-echo "======================================"
+echo "7. Checking multiple booking statuses..."
+
+STATUS_COUNT="$(
+    docker exec "${CONTAINER_NAME}" \
+    psql -U "${DB_USER}" -d "${DB_NAME}" -tAc \
+    "SELECT COUNT(DISTINCT status) FROM hotel_bookings;"
+)"
+
+echo "Distinct statuses: ${STATUS_COUNT}"
+
+if [[ "${STATUS_COUNT}" -lt 2 ]]; then
+    echo "FAIL: Seed data should contain multiple statuses."
+    exit 1
+fi
+
+echo "PASS: Multiple statuses present."
+
+echo
+echo "8. Checking optimization index..."
+
+INDEX_EXISTS="$(
+    docker exec "${CONTAINER_NAME}" \
+    psql -U "${DB_USER}" -d "${DB_NAME}" -tAc \
+    "SELECT COUNT(*)
+     FROM pg_indexes
+     WHERE schemaname = 'public'
+       AND indexname = 'idx_hotel_bookings_city_created_at';"
+)"
+
+if [[ "${INDEX_EXISTS}" -ne 1 ]]; then
+    echo "FAIL: Optimization index is missing."
+    exit 1
+fi
+
+echo "PASS: Optimization index exists."
+
+echo
+echo "========================================"
+echo "ALL DATABASE HEALTH CHECKS PASSED"
+echo "========================================"

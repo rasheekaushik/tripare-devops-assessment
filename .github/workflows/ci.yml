@@ -8,14 +8,30 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   terraform:
-    name: Terraform Validation
+    name: Terraform - ${{ matrix.environment }}
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - dev
+          - prod
 
     defaults:
       run:
-        working-directory: terraform
+        working-directory: infra/envs/${{ matrix.environment }}
+
+    env:
+      AWS_ACCESS_KEY_ID: dummy
+      AWS_SECRET_ACCESS_KEY: dummy
+      AWS_SESSION_TOKEN: dummy
+      AWS_EC2_METADATA_DISABLED: "true"
 
     steps:
       - name: Checkout repository
@@ -27,13 +43,29 @@ jobs:
           terraform_version: "1.16.1"
 
       - name: Terraform Format Check
-        run: terraform fmt -check -recursive
+        working-directory: .
+        run: terraform fmt -check -recursive infra
 
       - name: Terraform Init
-        run: terraform init -backend=false
+        run: terraform init
 
       - name: Terraform Validate
         run: terraform validate
+
+      - name: Terraform Plan
+        run: |
+          terraform plan -refresh=false -no-color | tee terraform-plan.txt
+
+      - name: Publish Terraform Plan to Summary
+        if: always()
+        run: |
+          {
+            echo "## Terraform Plan - ${{ matrix.environment }}"
+            echo
+            echo '```text'
+            cat terraform-plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   shellcheck:
     name: Shell Script Validation
@@ -49,10 +81,10 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: Check backup script
-        run: shellcheck database/backup.sh
+        run: shellcheck scripts/backup.sh
 
       - name: Check restore script
-        run: shellcheck database/restore.sh
+        run: shellcheck scripts/restore.sh
 
       - name: Check health check script
         run: shellcheck scripts/health-check.sh
@@ -98,11 +130,67 @@ jobs:
       - name: Run database health check
         run: ./scripts/health-check.sh
 
-      - name: Verify database tables
+      - name: Run query optimization test
         run: |
-          docker exec tripare-postgres \
+          docker exec -i tripare-postgres \
             psql -U tripare_user -d tripare \
-            -c "\dt"
+            < database/optimize.sql
+
+      - name: Create database backup
+        run: ./scripts/backup.sh
+
+      - name: Verify backup was created
+        run: |
+          BACKUP_COUNT=$(find database/backups -type f -name '*.sql' | wc -l)
+
+          if [ "$BACKUP_COUNT" -lt 1 ]; then
+            echo "No database backup was created."
+            exit 1
+          fi
+
+          echo "Backup files:"
+          find database/backups -type f -name '*.sql' -print
+
+      - name: Restore latest backup
+        run: |
+          BACKUP_FILE=$(find database/backups -type f -name '*.sql' -print | sort | tail -n 1)
+
+          if [ -z "$BACKUP_FILE" ]; then
+            echo "No backup file found."
+            exit 1
+          fi
+
+          echo "Restoring: $BACKUP_FILE"
+          ./scripts/restore.sh "$BACKUP_FILE"
+
+      - name: Verify restored database
+        run: |
+          BOOKING_COUNT=$(
+            docker exec tripare-postgres \
+              psql -U tripare_user -d tripare_restore_test -tAc \
+              "SELECT COUNT(*) FROM hotel_bookings;"
+          )
+
+          EVENT_COUNT=$(
+            docker exec tripare-postgres \
+              psql -U tripare_user -d tripare_restore_test -tAc \
+              "SELECT COUNT(*) FROM booking_events;"
+          )
+
+          echo "Restored hotel_bookings rows: $BOOKING_COUNT"
+          echo "Restored booking_events rows: $EVENT_COUNT"
+
+          if [ "$BOOKING_COUNT" -lt 100 ]; then
+            echo "Restored database does not contain enough bookings."
+            exit 1
+          fi
+
+          if [ "$EVENT_COUNT" -lt 1 ]; then
+            echo "Restored database contains no booking events."
+            exit 1
+          fi
+
+          echo "Restore verification passed."
 
       - name: Stop PostgreSQL
         if: always()

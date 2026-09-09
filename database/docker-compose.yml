@@ -14,13 +14,14 @@ services:
 
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
+      - ./seed/001_seed_data.sql:/docker-entrypoint-initdb.d/002_seed_data.sql:ro
 
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tripare_user -d tripare"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
 volumes:
   postgres_data:

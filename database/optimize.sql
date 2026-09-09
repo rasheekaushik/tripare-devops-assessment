@@ -1,29 +1,40 @@
--- ============================================================
--- Tripare AI DevOps Assessment
--- PostgreSQL Query Optimization
--- ============================================================
+-- Query optimization demonstration
+-- Required assessment query:
+-- Filter by city and the last 30 days, then aggregate by org and status.
 
--- Check the current execution plan
+\echo '============================================================'
+\echo 'BEFORE INDEX'
+\echo '============================================================'
+
+DROP INDEX IF EXISTS idx_hotel_bookings_city_created_at;
+
+ANALYZE hotel_bookings;
+
 EXPLAIN ANALYZE
-SELECT *
-FROM orders
-WHERE customer_id = 3
-AND status = 'completed';
+SELECT org_id, status, COUNT(*), SUM(amount)
+FROM hotel_bookings
+WHERE city = 'delhi'
+  AND created_at >= NOW() - INTERVAL '30 days'
+GROUP BY org_id, status;
 
--- Composite index to optimize the query
-CREATE INDEX IF NOT EXISTS idx_orders_customer_status
-ON orders(customer_id, status);
 
--- Verify the optimized execution plan
+\echo '============================================================'
+\echo 'CREATE OPTIMIZATION INDEX'
+\echo '============================================================'
+
+CREATE INDEX idx_hotel_bookings_city_created_at
+    ON hotel_bookings(city, created_at);
+
+ANALYZE hotel_bookings;
+
+
+\echo '============================================================'
+\echo 'AFTER INDEX'
+\echo '============================================================'
+
 EXPLAIN ANALYZE
-SELECT *
-FROM orders
-WHERE customer_id = 3
-AND status = 'completed';
-
--- Verify index usage
-SELECT
-    indexname,
-    indexdef
-FROM pg_indexes
-WHERE tablename = 'orders';
+SELECT org_id, status, COUNT(*), SUM(amount)
+FROM hotel_bookings
+WHERE city = 'delhi'
+  AND created_at >= NOW() - INTERVAL '30 days'
+GROUP BY org_id, status;
