@@ -1,0 +1,109 @@
+name: Tripare DevOps CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  terraform:
+    name: Terraform Validation
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.1"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+  shellcheck:
+    name: Shell Script Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Check backup script
+        run: shellcheck database/backup.sh
+
+      - name: Check restore script
+        run: shellcheck database/restore.sh
+
+      - name: Check health check script
+        run: shellcheck scripts/health-check.sh
+
+  docker:
+    name: Docker Compose Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Compose
+        run: docker compose -f database/docker-compose.yml config
+
+  database:
+    name: Database Reliability Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start PostgreSQL
+        run: docker compose -f database/docker-compose.yml up -d
+
+      - name: Wait for PostgreSQL
+        run: |
+          for i in {1..30}; do
+            if docker exec tripare-postgres pg_isready -U tripare_user -d tripare; then
+              echo "PostgreSQL is ready."
+              exit 0
+            fi
+
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+
+          echo "PostgreSQL did not become ready."
+          docker compose -f database/docker-compose.yml logs
+          exit 1
+
+      - name: Run database health check
+        run: ./scripts/health-check.sh
+
+      - name: Verify database tables
+        run: |
+          docker exec tripare-postgres \
+            psql -U tripare_user -d tripare \
+            -c "\dt"
+
+      - name: Stop PostgreSQL
+        if: always()
+        run: docker compose -f database/docker-compose.yml down -v
