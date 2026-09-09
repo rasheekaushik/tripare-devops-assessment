@@ -75,11 +75,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Install ShellCheck
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
-
       - name: Check backup script
         run: shellcheck scripts/backup.sh
 
@@ -88,7 +83,7 @@ jobs:
 
       - name: Check health check script
         run: shellcheck scripts/health-check.sh
-
+ 
   docker:
     name: Docker Compose Validation
     runs-on: ubuntu-latest
@@ -127,14 +122,14 @@ jobs:
           docker compose -f database/docker-compose.yml logs
           exit 1
 
-      - name: Run database health check
-        run: ./scripts/health-check.sh
-
       - name: Run query optimization test
         run: |
           docker exec -i tripare-postgres \
             psql -U tripare_user -d tripare \
             < database/optimize.sql
+
+      - name: Run database health check
+        run: ./scripts/health-check.sh 
 
       - name: Create database backup
         run: ./scripts/backup.sh
