@@ -8,6 +8,9 @@ crash.log
 # Terraform variables containing secrets
 terraform.tfvars
 
+# Assessment environment configuration is intentionally committed
+!infra/envs/dev/terraform.tfvars
+!infra/envs/prod/terraform.tfvars
 # PostgreSQL backups
 database/backups/
 
